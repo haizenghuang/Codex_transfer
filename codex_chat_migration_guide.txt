@@ -1,0 +1,139 @@
+Codex 聊天记录迁移极简说明
+
+文件位置：
+C:\Users\15409\Desktop\SDK_test\SDK_trae1\codex_chat_migration_guide.txt
+
+一、旧电脑极简步骤
+1. 完全退出 Codex。
+2. 打开 PowerShell。
+3. 将下面“旧电脑导出脚本”整段一次性全部粘贴进去，按回车。
+4. 执行完成后，到桌面找到生成的 zip 文件。
+5. 把这个 zip 拷到新电脑。
+
+二、新电脑极简步骤
+1. 安装 Codex，并至少打开过一次，然后完全退出。
+2. 把旧电脑导出的 zip 放到新电脑，例如桌面。
+3. 打开 PowerShell。
+4. 将下面“新电脑导入脚本”整段一次性全部粘贴进去，按回车。
+5. 出现提示后，输入 zip 的完整路径并回车。
+6. 导入完成后，重新打开 Codex。
+7. 如有需要，重新登录同一账号。
+8. 检查左侧线程栏是否恢复。
+
+三、注意
+1. 两段脚本都是一次性整段粘贴执行，不需要逐行执行。
+2. 执行脚本前，Codex 必须完全退出。
+3. 新电脑导入脚本会先自动备份当前 .codex 数据。
+
+四、旧电脑导出脚本
+
+$proc = Get-Process Codex -ErrorAction SilentlyContinue
+if ($proc) { throw "请先完全退出 Codex 再执行本脚本。" }
+
+$srcRoot = Join-Path $env:USERPROFILE ".codex"
+if (-not (Test-Path $srcRoot)) { throw "未找到目录：$srcRoot" }
+
+$items = @(
+  "sessions",
+  "session_index.jsonl",
+  "state_5.sqlite",
+  "state_5.sqlite-shm",
+  "state_5.sqlite-wal",
+  "memories",
+  "sqlite",
+  ".codex-global-state.json",
+  "config.toml"
+)
+
+$ts = Get-Date -Format "yyyyMMdd_HHmmss"
+$stage = Join-Path $env:TEMP "codex_export_$ts"
+$zip = Join-Path ([Environment]::GetFolderPath("Desktop")) "codex_chat_export_$ts.zip"
+
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+foreach ($item in $items) {
+  $src = Join-Path $srcRoot $item
+  if (Test-Path $src) {
+    Copy-Item -LiteralPath $src -Destination (Join-Path $stage $item) -Recurse -Force
+  }
+}
+
+@{
+  ExportedAt = Get-Date -Format s
+  Source     = $srcRoot
+  Items      = ($items -join ", ")
+} | Out-String | Set-Content -LiteralPath (Join-Path $stage "manifest.txt") -Encoding UTF8
+
+if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
+Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
+Remove-Item -LiteralPath $stage -Recurse -Force
+
+Write-Host "导出完成：$zip"
+
+五、新电脑导入脚本
+
+$proc = Get-Process Codex -ErrorAction SilentlyContinue
+if ($proc) { throw "请先完全退出 Codex 再执行本脚本。" }
+
+$zip = Read-Host "请输入导出包 zip 的完整路径"
+if (-not (Test-Path $zip)) { throw "找不到文件：$zip" }
+
+function Copy-Entry {
+  param(
+    [string]$Source,
+    [string]$Destination
+  )
+
+  $item = Get-Item -LiteralPath $Source -Force
+
+  if ($item.PSIsContainer) {
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Destination -Recurse -Force
+  } else {
+    $parent = Split-Path -Parent $Destination
+    if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+  }
+}
+
+$dstRoot = Join-Path $env:USERPROFILE ".codex"
+$items = @(
+  "sessions",
+  "session_index.jsonl",
+  "state_5.sqlite",
+  "state_5.sqlite-shm",
+  "state_5.sqlite-wal",
+  "memories",
+  "sqlite",
+  ".codex-global-state.json",
+  "config.toml"
+)
+
+$ts = Get-Date -Format "yyyyMMdd_HHmmss"
+$extract = Join-Path $env:TEMP "codex_import_$ts"
+$backup = Join-Path ([Environment]::GetFolderPath("Desktop")) "codex_backup_before_import_$ts"
+
+New-Item -ItemType Directory -Path $extract, $backup, $dstRoot -Force | Out-Null
+Expand-Archive -Path $zip -DestinationPath $extract -Force
+
+$payload = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
+if ($payload) {
+  $payloadRoot = $payload.FullName
+} else {
+  $payloadRoot = $extract
+}
+
+foreach ($item in $items) {
+  $src = Join-Path $payloadRoot $item
+  $dst = Join-Path $dstRoot $item
+  $bak = Join-Path $backup $item
+
+  if (Test-Path $dst) { Copy-Entry -Source $dst -Destination $bak }
+  if (Test-Path $src) { Copy-Entry -Source $src -Destination $dst }
+}
+
+Remove-Item -LiteralPath $extract -Recurse -Force
+
+Write-Host "导入完成：$dstRoot"
+Write-Host "导入前备份：$backup"
+Write-Host "现在可以启动 Codex 进行验证。"
